@@ -363,19 +363,12 @@ export function ChessCoachBoard() {
 
   return (
     <div className="w-full">
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-700">
-            Board
-          </p>
-          <p className="mt-1 text-lg font-semibold text-stone-950">
-            {turnLabel}
-          </p>
-        </div>
+      <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-base font-semibold text-stone-950">{turnLabel}</p>
 
         <div className="flex flex-wrap gap-3 sm:justify-end">
           <button
-            className="h-11 rounded-md border border-stone-300 px-4 text-sm font-semibold text-stone-800 transition hover:border-stone-500 hover:bg-stone-100"
+            className="h-10 rounded-md border border-stone-300 px-3 text-sm font-semibold text-stone-800 transition hover:border-stone-500 hover:bg-stone-100"
             type="button"
             onClick={handleFlipBoard}
             aria-pressed={boardOrientation === "black"}
@@ -383,7 +376,7 @@ export function ChessCoachBoard() {
             Flip Board
           </button>
           <button
-            className="h-11 rounded-md border border-stone-300 px-4 text-sm font-semibold text-stone-800 transition hover:border-stone-500 hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-45"
+            className="h-10 rounded-md border border-stone-300 px-3 text-sm font-semibold text-stone-800 transition hover:border-stone-500 hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-45"
             type="button"
             onClick={handleUndo}
             disabled={!canUndo}
@@ -391,7 +384,7 @@ export function ChessCoachBoard() {
             Undo
           </button>
           <button
-            className="h-11 rounded-md bg-emerald-700 px-4 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-70"
+            className="h-10 rounded-md bg-emerald-700 px-3 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-70"
             type="button"
             onClick={handleAnalyze}
             disabled={isAnalyzing}
@@ -399,7 +392,7 @@ export function ChessCoachBoard() {
             {isAnalyzing ? "Analyzing..." : "Analyze"}
           </button>
           <button
-            className="h-11 rounded-md bg-stone-950 px-4 text-sm font-semibold text-white transition hover:bg-stone-800"
+            className="h-10 rounded-md bg-stone-950 px-3 text-sm font-semibold text-white transition hover:bg-stone-800"
             type="button"
             onClick={handleReset}
           >
@@ -434,7 +427,7 @@ export function ChessCoachBoard() {
         />
       </div>
 
-      <section className="mt-5 rounded-lg border border-stone-200 bg-white p-4">
+      <section className="mt-4 rounded-lg border border-stone-200 bg-white p-4">
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-base font-semibold text-stone-950">Analysis</h2>
           {isAnalyzing ? (
