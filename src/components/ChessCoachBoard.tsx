@@ -27,6 +27,8 @@ type MoveSquares = {
   promotion?: string;
 };
 
+type BoardOrientation = "white" | "black";
+
 function getTurnLabel(game: Chess) {
   if (game.isCheckmate()) {
     return `Checkmate. ${game.turn() === "w" ? "Black" : "White"} wins.`;
@@ -133,6 +135,8 @@ function formatScore(score: EngineScore, turn: Color) {
 
 export function ChessCoachBoard() {
   const [game, setGame] = useState(() => new Chess());
+  const [boardOrientation, setBoardOrientation] =
+    useState<BoardOrientation>("white");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult>({
@@ -239,6 +243,12 @@ export function ChessCoachBoard() {
     setAnalysis({ bestMove: null, candidates: [] });
     setAnalysisError(null);
     setEngineLogs([]);
+  }
+
+  function handleFlipBoard() {
+    setBoardOrientation((currentOrientation) =>
+      currentOrientation === "white" ? "black" : "white",
+    );
   }
 
   function handleAnalyze() {
@@ -363,7 +373,15 @@ export function ChessCoachBoard() {
           </p>
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3 sm:justify-end">
+          <button
+            className="h-11 rounded-md border border-stone-300 px-4 text-sm font-semibold text-stone-800 transition hover:border-stone-500 hover:bg-stone-100"
+            type="button"
+            onClick={handleFlipBoard}
+            aria-pressed={boardOrientation === "black"}
+          >
+            Flip Board
+          </button>
           <button
             className="h-11 rounded-md border border-stone-300 px-4 text-sm font-semibold text-stone-800 transition hover:border-stone-500 hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-45"
             type="button"
@@ -397,6 +415,7 @@ export function ChessCoachBoard() {
             position: game.fen(),
             allowDragOffBoard: false,
             animationDurationInMs: 180,
+            boardOrientation,
             boardStyle: {
               width: "100%",
               height: "100%",
