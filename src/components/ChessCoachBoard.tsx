@@ -100,6 +100,17 @@ function parseUciMove(move: string): MoveSquares {
   };
 }
 
+function cloneGameWithHistory(game: Chess) {
+  const clone = new Chess();
+  const pgn = game.pgn();
+
+  if (pgn) {
+    clone.loadPgn(pgn);
+  }
+
+  return clone;
+}
+
 function formatMove(game: Chess, move: string) {
   const { from, to, promotion } = parseUciMove(move);
 
@@ -208,7 +219,7 @@ export function ChessCoachBoard() {
       return false;
     }
 
-    const nextGame = new Chess(game.fen());
+    const nextGame = cloneGameWithHistory(game);
     const move = nextGame.move({
       from: sourceSquare as Square,
       to: targetSquare as Square,
@@ -229,9 +240,11 @@ export function ChessCoachBoard() {
 
   function handleUndo() {
     stopCurrentAnalysis();
-    const nextGame = new Chess(game.fen());
-    nextGame.undo();
-    setGame(nextGame);
+    setGame((currentGame) => {
+      const nextGame = cloneGameWithHistory(currentGame);
+      nextGame.undo();
+      return nextGame;
+    });
     setAnalysis({ bestMove: null, candidates: [] });
     setAnalysisError(null);
     setEngineLogs([]);
