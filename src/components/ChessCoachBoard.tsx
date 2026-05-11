@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Chess, type Square } from "chess.js";
 import { Chessboard } from "react-chessboard";
+import type { CSSProperties } from "react";
 import {
   selectRecommendedMove,
   type AnalysisMode,
@@ -13,6 +14,10 @@ import {
 type AnalysisResult = {
   bestMove: string | null;
   candidates: CandidateMove[];
+  mode: AnalysisMode | null;
+  recommendedMove: string | null;
+  evaluationLoss: number | null;
+  usedFallback: boolean;
 };
 
 type MoveSquares = {
@@ -22,6 +27,20 @@ type MoveSquares = {
 };
 
 type BoardOrientation = "white" | "black";
+
+type LegalMoveTarget = {
+  square: Square;
+  isCapture: boolean;
+};
+
+const emptyAnalysis: AnalysisResult = {
+  bestMove: null,
+  candidates: [],
+  mode: null,
+  recommendedMove: null,
+  evaluationLoss: null,
+  usedFallback: false,
+};
 
 const analysisModeDetails: Record<
   AnalysisMode,
@@ -162,6 +181,20 @@ function formatEvaluationLoss(loss: number | null) {
   return `${(loss / 100).toFixed(2)} pawns`;
 }
 
+function mergeSquareStyle(
+  styles: Record<string, CSSProperties>,
+  square: Square,
+  style: CSSProperties,
+) {
+  styles[square] = {
+    ...(styles[square] ?? {}),
+    ...style,
+    boxShadow: [styles[square]?.boxShadow, style.boxShadow]
+      .filter(Boolean)
+      .join(", "),
+  };
+}
+
 export function ChessCoachBoard() {
   const [game, setGame] = useState(() => new Chess());
   const [boardOrientation, setBoardOrientation] =
@@ -169,23 +202,26 @@ export function ChessCoachBoard() {
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("practical");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [analysis, setAnalysis] = useState<AnalysisResult>({
-    bestMove: null,
-    candidates: [],
-  });
+  const [analysis, setAnalysis] = useState<AnalysisResult>(emptyAnalysis);
+  const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
+  const [legalMoveTargets, setLegalMoveTargets] = useState<LegalMoveTarget[]>(
+    [],
+  );
   const [engineLogs, setEngineLogs] = useState<string[]>([]);
   const workerRef = useRef<Worker | null>(null);
   const analysisTimeoutRef = useRef<number | null>(null);
+  const analysisRequestIdRef = useRef(0);
 
   const turnLabel = useMemo(() => getTurnLabel(game), [game]);
   const canUndo = game.history().length > 0;
-  const recommendation = useMemo(
-    () => selectRecommendedMove(analysis.candidates, analysisMode),
-    [analysis.candidates, analysisMode],
-  );
-  const recommendedCandidate = recommendation.candidate;
+  const analysisModeForResult = analysis.mode ?? analysisMode;
+  const selectedModeDetails = analysisModeDetails[analysisModeForResult];
+  const recommendedCandidate =
+    analysis.candidates.find(
+      (candidate) => candidate.move === analysis.recommendedMove,
+    ) ?? null;
   const primaryCandidate = analysis.candidates[0];
-  const highlightedMove = recommendedCandidate?.move ?? analysis.bestMove;
+  const highlightedMove = analysis.recommendedMove ?? analysis.bestMove;
   const highlightedMoveSquares = highlightedMove
     ? parseUciMove(highlightedMove)
     : {};
@@ -199,20 +235,49 @@ export function ChessCoachBoard() {
           },
         ]
       : [];
-  const squareStyles =
-    highlightedMoveSquares.from && highlightedMoveSquares.to
-      ? {
-          [highlightedMoveSquares.from]: {
-            backgroundColor: "rgba(250, 204, 21, 0.72)",
-            boxShadow: "inset 0 0 0 4px rgba(120, 53, 15, 0.55)",
-          },
-          [highlightedMoveSquares.to]: {
-            background:
-              "radial-gradient(circle, rgba(250, 204, 21, 0.88) 34%, rgba(250, 204, 21, 0.42) 36%, rgba(250, 204, 21, 0.42) 100%)",
-          },
-        }
-      : undefined;
-  const selectedModeDetails = analysisModeDetails[analysisMode];
+  const squareStyles = useMemo(() => {
+    const styles: Record<string, CSSProperties> = {};
+
+    if (highlightedMoveSquares.from && highlightedMoveSquares.to) {
+      mergeSquareStyle(styles, highlightedMoveSquares.from, {
+        backgroundColor: "rgba(250, 204, 21, 0.72)",
+        boxShadow: "inset 0 0 0 4px rgba(120, 53, 15, 0.55)",
+      });
+      mergeSquareStyle(styles, highlightedMoveSquares.to, {
+        backgroundColor: "rgba(250, 204, 21, 0.48)",
+        backgroundImage:
+          "radial-gradient(circle, rgba(250, 204, 21, 0.88) 34%, transparent 36%)",
+      });
+    }
+
+    if (selectedSquare) {
+      mergeSquareStyle(styles, selectedSquare, {
+        backgroundColor: "rgba(59, 130, 246, 0.28)",
+      });
+    }
+
+    for (const target of legalMoveTargets) {
+      mergeSquareStyle(
+        styles,
+        target.square,
+        target.isCapture
+          ? {
+              boxShadow: "inset 0 0 0 5px rgba(82, 82, 82, 0.45)",
+            }
+          : {
+              backgroundImage:
+                "radial-gradient(circle, rgba(82, 82, 82, 0.55) 16%, transparent 18%)",
+            },
+      );
+    }
+
+    return Object.keys(styles).length ? styles : undefined;
+  }, [
+    highlightedMoveSquares.from,
+    highlightedMoveSquares.to,
+    legalMoveTargets,
+    selectedSquare,
+  ]);
   const isRecommendationDifferentFromTop =
     recommendedCandidate && primaryCandidate
       ? recommendedCandidate.move !== primaryCandidate.move
@@ -228,6 +293,8 @@ export function ChessCoachBoard() {
   }, []);
 
   function stopCurrentAnalysis() {
+    analysisRequestIdRef.current += 1;
+
     if (analysisTimeoutRef.current) {
       window.clearTimeout(analysisTimeoutRef.current);
       analysisTimeoutRef.current = null;
@@ -236,6 +303,46 @@ export function ChessCoachBoard() {
     workerRef.current?.terminate();
     workerRef.current = null;
     setIsAnalyzing(false);
+  }
+
+  function clearBoardGuidance() {
+    setSelectedSquare(null);
+    setLegalMoveTargets([]);
+    setAnalysis(emptyAnalysis);
+    setAnalysisError(null);
+    setEngineLogs([]);
+  }
+
+  function getLegalMoveTargets(square: Square) {
+    return game
+      .moves({ square, verbose: true })
+      .map((move) => ({
+        square: move.to as Square,
+        isCapture: Boolean(move.captured),
+      }));
+  }
+
+  function isOwnPiece(square: Square) {
+    const piece = game.get(square);
+    return Boolean(piece && piece.color === game.turn());
+  }
+
+  function makeMove(sourceSquare: Square, targetSquare: Square) {
+    const nextGame = cloneGameWithHistory(game);
+    const move = nextGame.move({
+      from: sourceSquare,
+      to: targetSquare,
+      promotion: "q",
+    });
+
+    if (!move) {
+      return false;
+    }
+
+    stopCurrentAnalysis();
+    setGame(nextGame);
+    clearBoardGuidance();
+    return true;
   }
 
   function handlePieceDrop({
@@ -249,23 +356,30 @@ export function ChessCoachBoard() {
       return false;
     }
 
-    const nextGame = cloneGameWithHistory(game);
-    const move = nextGame.move({
-      from: sourceSquare as Square,
-      to: targetSquare as Square,
-      promotion: "q",
-    });
+    return makeMove(sourceSquare as Square, targetSquare as Square);
+  }
 
-    if (!move) {
-      return false;
+  function handleSquareClick({ square }: { square: string }) {
+    const clickedSquare = square as Square;
+
+    if (selectedSquare) {
+      const selectedLegalMove = legalMoveTargets.some(
+        (target) => target.square === clickedSquare,
+      );
+
+      if (selectedLegalMove && makeMove(selectedSquare, clickedSquare)) {
+        return;
+      }
     }
 
-    stopCurrentAnalysis();
-    setGame(nextGame);
-    setAnalysis({ bestMove: null, candidates: [] });
-    setAnalysisError(null);
-    setEngineLogs([]);
-    return true;
+    if (isOwnPiece(clickedSquare)) {
+      setSelectedSquare(clickedSquare);
+      setLegalMoveTargets(getLegalMoveTargets(clickedSquare));
+      return;
+    }
+
+    setSelectedSquare(null);
+    setLegalMoveTargets([]);
   }
 
   function handleUndo() {
@@ -275,17 +389,13 @@ export function ChessCoachBoard() {
       nextGame.undo();
       return nextGame;
     });
-    setAnalysis({ bestMove: null, candidates: [] });
-    setAnalysisError(null);
-    setEngineLogs([]);
+    clearBoardGuidance();
   }
 
   function handleReset() {
     stopCurrentAnalysis();
     setGame(new Chess());
-    setAnalysis({ bestMove: null, candidates: [] });
-    setAnalysisError(null);
-    setEngineLogs([]);
+    clearBoardGuidance();
   }
 
   function handleFlipBoard() {
@@ -301,20 +411,26 @@ export function ChessCoachBoard() {
       analysisTimeoutRef.current = null;
     }
 
+    const requestId = analysisRequestIdRef.current + 1;
+    analysisRequestIdRef.current = requestId;
+    const modeForRequest = analysisMode;
     const worker = new Worker("/stockfish/stockfish-18-lite-single.js");
     const candidates = new Map<number, CandidateMove>();
+    const engineLogBuffer: string[] = [];
 
     workerRef.current = worker;
     setIsAnalyzing(true);
-    setAnalysisError(null);
-    setEngineLogs([]);
-    setAnalysis({ bestMove: null, candidates: [] });
+    clearBoardGuidance();
 
     analysisTimeoutRef.current = window.setTimeout(() => {
-      if (workerRef.current !== worker) {
+      if (
+        workerRef.current !== worker ||
+        analysisRequestIdRef.current !== requestId
+      ) {
         return;
       }
 
+      setEngineLogs(engineLogBuffer);
       setAnalysisError(
         "Stockfish did not finish in time. Try Analyze again or make a move and re-run analysis.",
       );
@@ -326,24 +442,21 @@ export function ChessCoachBoard() {
     }, 20000);
 
     worker.onmessage = (event: MessageEvent<string>) => {
-      if (workerRef.current !== worker) {
+      if (
+        workerRef.current !== worker ||
+        analysisRequestIdRef.current !== requestId
+      ) {
         return;
       }
 
       const line = String(event.data);
-      setEngineLogs((currentLogs) => [...currentLogs, line]);
+      engineLogBuffer.push(line);
 
       const candidate = parseInfoLine(line);
       if (candidate) {
         const currentCandidate = candidates.get(candidate.multipv);
         if (!currentCandidate || candidate.depth >= currentCandidate.depth) {
           candidates.set(candidate.multipv, candidate);
-          setAnalysis((currentAnalysis) => ({
-            ...currentAnalysis,
-            candidates: Array.from(candidates.values())
-              .sort((a, b) => a.multipv - b.multipv)
-              .slice(0, 6),
-          }));
         }
       }
 
@@ -353,12 +466,23 @@ export function ChessCoachBoard() {
           window.clearTimeout(analysisTimeoutRef.current);
           analysisTimeoutRef.current = null;
         }
+        const finalCandidates = Array.from(candidates.values())
+          .sort((a, b) => a.multipv - b.multipv)
+          .slice(0, 6);
+        const recommendation = selectRecommendedMove(
+          finalCandidates,
+          modeForRequest,
+        );
+
         setAnalysis({
           bestMove,
-          candidates: Array.from(candidates.values())
-            .sort((a, b) => a.multipv - b.multipv)
-            .slice(0, 6),
+          candidates: finalCandidates,
+          mode: modeForRequest,
+          recommendedMove: recommendation.candidate?.move ?? bestMove,
+          evaluationLoss: recommendation.evaluationLoss,
+          usedFallback: recommendation.usedFallback,
         });
+        setEngineLogs(engineLogBuffer);
         setIsAnalyzing(false);
         worker.terminate();
         workerRef.current = null;
@@ -367,6 +491,7 @@ export function ChessCoachBoard() {
           window.clearTimeout(analysisTimeoutRef.current);
           analysisTimeoutRef.current = null;
         }
+        setEngineLogs(engineLogBuffer);
         setAnalysisError(
           "Stockfish did not find a legal best move for this position.",
         );
@@ -377,7 +502,10 @@ export function ChessCoachBoard() {
     };
 
     worker.onerror = () => {
-      if (workerRef.current !== worker) {
+      if (
+        workerRef.current !== worker ||
+        analysisRequestIdRef.current !== requestId
+      ) {
         return;
       }
 
@@ -385,8 +513,8 @@ export function ChessCoachBoard() {
         window.clearTimeout(analysisTimeoutRef.current);
         analysisTimeoutRef.current = null;
       }
-      setEngineLogs((currentLogs) => [
-        ...currentLogs,
+      setEngineLogs([
+        ...engineLogBuffer,
         "Engine error: Stockfish worker failed to load or run.",
       ]);
       setAnalysisError(
@@ -484,6 +612,7 @@ export function ChessCoachBoard() {
             arrows: bestMoveArrows,
             allowDrawingArrows: false,
             onPieceDrop: handlePieceDrop,
+            onSquareClick: handleSquareClick,
             canDragPiece: ({ piece }) => {
               const pieceColor = piece.pieceType[0];
               return pieceColor === game.turn();
@@ -510,8 +639,8 @@ export function ChessCoachBoard() {
 
         {isAnalyzing ? (
           <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm font-medium leading-6 text-emerald-900">
-            Analyzing the current board position. Candidate moves will appear
-            as the engine searches.
+            Analyzing the current board position. Results will appear when the
+            search finishes.
           </div>
         ) : null}
 
@@ -560,7 +689,7 @@ export function ChessCoachBoard() {
                   </p>
                   <p className="mt-1 font-semibold text-stone-950">
                     {selectedModeDetails.label}
-                    {recommendation.usedFallback ? " fallback" : ""}
+                    {analysis.usedFallback ? " fallback" : ""}
                   </p>
                 </div>
                 <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
@@ -576,7 +705,7 @@ export function ChessCoachBoard() {
                     Loss from best
                   </p>
                   <p className="mt-1 font-semibold text-stone-950">
-                    {formatEvaluationLoss(recommendation.evaluationLoss)}
+                    {formatEvaluationLoss(analysis.evaluationLoss)}
                   </p>
                 </div>
                 <div className="rounded-md border border-stone-200 bg-stone-50 p-3 sm:col-span-3">
