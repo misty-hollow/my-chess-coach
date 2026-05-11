@@ -1,20 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Chess, type Color, type Square } from "chess.js";
+import { Chess, type Square } from "chess.js";
 import { Chessboard } from "react-chessboard";
-
-type EngineScore =
-  | { type: "cp"; value: number }
-  | { type: "mate"; value: number };
-
-type CandidateMove = {
-  multipv: number;
-  depth: number;
-  move: string;
-  score: EngineScore;
-  pv: string[];
-};
+import {
+  selectRecommendedMove,
+  type AnalysisMode,
+  type CandidateMove,
+  type EngineScore,
+} from "@/lib/analysisRecommendations";
 
 type AnalysisResult = {
   bestMove: string | null;
@@ -28,6 +22,24 @@ type MoveSquares = {
 };
 
 type BoardOrientation = "white" | "black";
+
+const analysisModeDetails: Record<
+  AnalysisMode,
+  { label: string; description: string }
+> = {
+  best: {
+    label: "Best",
+    description: "Shows the engine's top recommendation.",
+  },
+  practical: {
+    label: "Practical",
+    description: "Suggests a strong, natural move for study.",
+  },
+  training: {
+    label: "Training",
+    description: "Shows a reasonable move that keeps the position playable.",
+  },
+};
 
 function getTurnLabel(game: Chess) {
   if (game.isCheckmate()) {
@@ -128,26 +140,33 @@ function formatMove(game: Chess, move: string) {
   return playedMove ? `${playedMove.san} (${move})` : move;
 }
 
-function formatScore(score: EngineScore, turn: Color) {
+function formatSideToMoveScore(score: EngineScore) {
   if (score.type === "mate") {
-    const winner =
-      (score.value > 0 && turn === "w") || (score.value < 0 && turn === "b")
-        ? "White"
-        : "Black";
-
-    return `${winner} mate in ${Math.abs(score.value)}`;
+    return score.value > 0
+      ? `Mate in ${Math.abs(score.value)}`
+      : `Losing mate in ${Math.abs(score.value)}`;
   }
 
-  const whiteCentipawns = turn === "w" ? score.value : -score.value;
-  const pawns = whiteCentipawns / 100;
+  return `${score.value >= 0 ? "+" : ""}${(score.value / 100).toFixed(2)}`;
+}
 
-  return `White ${pawns >= 0 ? "+" : ""}${pawns.toFixed(2)}`;
+function formatEvaluationLoss(loss: number | null) {
+  if (loss === null) {
+    return "-";
+  }
+
+  if (loss >= 9000) {
+    return "large";
+  }
+
+  return `${(loss / 100).toFixed(2)} pawns`;
 }
 
 export function ChessCoachBoard() {
   const [game, setGame] = useState(() => new Chess());
   const [boardOrientation, setBoardOrientation] =
     useState<BoardOrientation>("white");
+  const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("practical");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult>({
@@ -160,33 +179,44 @@ export function ChessCoachBoard() {
 
   const turnLabel = useMemo(() => getTurnLabel(game), [game]);
   const canUndo = game.history().length > 0;
+  const recommendation = useMemo(
+    () => selectRecommendedMove(analysis.candidates, analysisMode),
+    [analysis.candidates, analysisMode],
+  );
+  const recommendedCandidate = recommendation.candidate;
   const primaryCandidate = analysis.candidates[0];
-  const bestMoveSquares = analysis.bestMove
-    ? parseUciMove(analysis.bestMove)
+  const highlightedMove = recommendedCandidate?.move ?? analysis.bestMove;
+  const highlightedMoveSquares = highlightedMove
+    ? parseUciMove(highlightedMove)
     : {};
   const bestMoveArrows =
-    bestMoveSquares.from && bestMoveSquares.to
+    highlightedMoveSquares.from && highlightedMoveSquares.to
       ? [
           {
-            startSquare: bestMoveSquares.from,
-            endSquare: bestMoveSquares.to,
+            startSquare: highlightedMoveSquares.from,
+            endSquare: highlightedMoveSquares.to,
             color: "rgba(250, 204, 21, 0.82)",
           },
         ]
       : [];
   const squareStyles =
-    bestMoveSquares.from && bestMoveSquares.to
+    highlightedMoveSquares.from && highlightedMoveSquares.to
       ? {
-          [bestMoveSquares.from]: {
+          [highlightedMoveSquares.from]: {
             backgroundColor: "rgba(250, 204, 21, 0.72)",
             boxShadow: "inset 0 0 0 4px rgba(120, 53, 15, 0.55)",
           },
-          [bestMoveSquares.to]: {
+          [highlightedMoveSquares.to]: {
             background:
               "radial-gradient(circle, rgba(250, 204, 21, 0.88) 34%, rgba(250, 204, 21, 0.42) 36%, rgba(250, 204, 21, 0.42) 100%)",
           },
         }
       : undefined;
+  const selectedModeDetails = analysisModeDetails[analysisMode];
+  const isRecommendationDifferentFromTop =
+    recommendedCandidate && primaryCandidate
+      ? recommendedCandidate.move !== primaryCandidate.move
+      : false;
 
   useEffect(() => {
     return () => {
@@ -312,7 +342,7 @@ export function ChessCoachBoard() {
             ...currentAnalysis,
             candidates: Array.from(candidates.values())
               .sort((a, b) => a.multipv - b.multipv)
-              .slice(0, 3),
+              .slice(0, 6),
           }));
         }
       }
@@ -327,7 +357,7 @@ export function ChessCoachBoard() {
           bestMove,
           candidates: Array.from(candidates.values())
             .sort((a, b) => a.multipv - b.multipv)
-            .slice(0, 3),
+            .slice(0, 6),
         });
         setIsAnalyzing(false);
         worker.terminate();
@@ -368,7 +398,7 @@ export function ChessCoachBoard() {
     };
 
     worker.postMessage("uci");
-    worker.postMessage("setoption name MultiPV value 3");
+    worker.postMessage("setoption name MultiPV value 6");
     worker.postMessage("isready");
     worker.postMessage(`position fen ${game.fen()}`);
     worker.postMessage("go depth 12");
@@ -378,6 +408,28 @@ export function ChessCoachBoard() {
     <div className="w-full">
       <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-base font-semibold text-stone-950">{turnLabel}</p>
+
+        <div className="flex flex-col gap-2 sm:items-end">
+          <label className="flex items-center gap-2 text-sm font-semibold text-stone-800">
+            Analysis Mode
+            <select
+              className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm font-semibold text-stone-950 outline-none transition focus:border-emerald-700"
+              value={analysisMode}
+              onChange={(event) =>
+                setAnalysisMode(event.target.value as AnalysisMode)
+              }
+            >
+              {Object.entries(analysisModeDetails).map(([mode, details]) => (
+                <option value={mode} key={mode}>
+                  {details.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="max-w-xs text-right text-xs leading-5 text-stone-600">
+            Practical mode favors strong, natural candidate moves for study.
+          </p>
+        </div>
 
         <div className="flex flex-wrap gap-3 sm:justify-end">
           <button
@@ -466,35 +518,73 @@ export function ChessCoachBoard() {
         {analysis.bestMove || analysis.candidates.length ? (
           <div className="mt-4 space-y-4">
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-800">
-                Best move
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-800">
+                    Recommended move
+                  </p>
+                  <p className="mt-2 text-3xl font-semibold tracking-tight text-stone-950">
+                    {recommendedCandidate
+                      ? formatMove(game, recommendedCandidate.move)
+                      : analysis.bestMove
+                        ? formatMove(game, analysis.bestMove)
+                        : "-"}
+                  </p>
+                </div>
+                <div className="rounded-md bg-white/80 px-3 py-2 text-sm font-semibold text-stone-800">
+                  {selectedModeDetails.label}
+                </div>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-amber-950">
+                {selectedModeDetails.description}
               </p>
-              <p className="mt-2 text-3xl font-semibold tracking-tight text-stone-950">
-                {analysis.bestMove ? formatMove(game, analysis.bestMove) : "-"}
-              </p>
-              {bestMoveSquares.from && bestMoveSquares.to ? (
+              {isRecommendationDifferentFromTop ? (
                 <p className="mt-2 text-sm font-medium text-amber-900">
-                  Highlighted from {bestMoveSquares.from} to {bestMoveSquares.to}
+                  This study recommendation differs from the top engine move,
+                  which remains visible below.
+                </p>
+              ) : null}
+              {highlightedMoveSquares.from && highlightedMoveSquares.to ? (
+                <p className="mt-2 text-sm font-medium text-amber-900">
+                  Highlighted from {highlightedMoveSquares.from} to{" "}
+                  {highlightedMoveSquares.to}
                 </p>
               ) : null}
             </div>
 
-            {primaryCandidate ? (
-              <div className="grid gap-3 sm:grid-cols-2">
+            {recommendedCandidate ? (
+              <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">
-                    Evaluation score
+                    Selected mode
                   </p>
                   <p className="mt-1 font-semibold text-stone-950">
-                    {formatScore(primaryCandidate.score, game.turn())}
+                    {selectedModeDetails.label}
+                    {recommendation.usedFallback ? " fallback" : ""}
                   </p>
                 </div>
                 <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">
+                    Evaluation
+                  </p>
+                  <p className="mt-1 font-semibold text-stone-950">
+                    {formatSideToMoveScore(recommendedCandidate.score)}
+                  </p>
+                </div>
+                <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">
+                    Loss from best
+                  </p>
+                  <p className="mt-1 font-semibold text-stone-950">
+                    {formatEvaluationLoss(recommendation.evaluationLoss)}
+                  </p>
+                </div>
+                <div className="rounded-md border border-stone-200 bg-stone-50 p-3 sm:col-span-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">
                     Principal variation
                   </p>
                   <p className="mt-1 text-sm leading-6 text-stone-700">
-                    {primaryCandidate.pv.join(" ")}
+                    {recommendedCandidate.pv.join(" ")}
                   </p>
                 </div>
               </div>
@@ -503,15 +593,31 @@ export function ChessCoachBoard() {
             <div className="grid gap-3">
               {analysis.candidates.map((candidate) => (
                 <div
-                  className="rounded-md border border-stone-200 bg-stone-50 p-3 transition hover:border-stone-300"
+                  className={`rounded-md border p-3 transition hover:border-stone-300 ${
+                    recommendedCandidate?.move === candidate.move
+                      ? "border-emerald-300 bg-emerald-50"
+                      : candidate.multipv === 1
+                        ? "border-amber-200 bg-amber-50/50"
+                        : "border-stone-200 bg-stone-50"
+                  }`}
                   key={`${candidate.multipv}-${candidate.move}`}
                 >
                   <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="font-semibold text-stone-950">
-                      {candidate.multipv}. {formatMove(game, candidate.move)}
-                    </p>
+                    <div>
+                      <p className="font-semibold text-stone-950">
+                        {candidate.multipv}. {formatMove(game, candidate.move)}
+                      </p>
+                      <div className="mt-1 flex flex-wrap gap-2 text-xs font-semibold uppercase tracking-[0.12em]">
+                        {candidate.multipv === 1 ? (
+                          <span className="text-amber-800">Top engine move</span>
+                        ) : null}
+                        {recommendedCandidate?.move === candidate.move ? (
+                          <span className="text-emerald-800">Recommended</span>
+                        ) : null}
+                      </div>
+                    </div>
                     <p className="text-sm font-medium text-stone-700">
-                      {formatScore(candidate.score, game.turn())}
+                      Eval {formatSideToMoveScore(candidate.score)}
                     </p>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-stone-600">
