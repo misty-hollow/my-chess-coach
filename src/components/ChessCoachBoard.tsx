@@ -252,7 +252,8 @@ export function ChessCoachBoard() {
 
     if (selectedSquare) {
       mergeSquareStyle(styles, selectedSquare, {
-        backgroundColor: "rgba(59, 130, 246, 0.28)",
+        backgroundColor: "rgba(96, 165, 250, 0.36)",
+        boxShadow: "inset 0 0 0 3px rgba(255, 255, 255, 0.55)",
       });
     }
 
@@ -262,11 +263,12 @@ export function ChessCoachBoard() {
         target.square,
         target.isCapture
           ? {
-              boxShadow: "inset 0 0 0 5px rgba(82, 82, 82, 0.45)",
+              boxShadow:
+                "inset 0 0 0 4px rgba(255, 255, 255, 0.88), inset 0 0 0 6px rgba(0, 0, 0, 0.28)",
             }
           : {
               backgroundImage:
-                "radial-gradient(circle, rgba(82, 82, 82, 0.55) 16%, transparent 18%)",
+                "radial-gradient(circle, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0.96) 18%, rgba(0, 0, 0, 0.34) 19%, transparent 22%)",
             },
       );
     }
